@@ -65,6 +65,22 @@ function mapStatus(isFixed: string | undefined): 'pending' | 'fixed' {
     return fixedKeywords.some(k => isFixed.toLowerCase().includes(k)) ? 'fixed' : 'pending';
 }
 
+// AI: 将各种时间格式标准化为 ISO 时间戳
+// 处理空字符串、纯时间(如"22:30")、标准格式等
+function normalizeTimestamp(timeStr: string | undefined | null): string {
+    if (!timeStr || timeStr.trim() === '') {
+        return new Date().toISOString(); // 空值时使用当前时间
+    }
+    const trimmed = timeStr.trim();
+    // 纯时间格式如 "22:30" 或 "15:05:00"，补全今天的日期
+    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(trimmed)) {
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        return `${today}T${trimmed}:00+08:00`;
+    }
+    // 已经是完整日期时间格式，直接返回
+    return trimmed;
+}
+
 export async function POST(request: Request) {
     try {
         let body = await request.json();
@@ -102,21 +118,21 @@ export async function POST(request: Request) {
 
         // AI: 写入 AFC 项目的 fault_records 表（而非独立的 tickets 表）
         const faultRecord: Record<string, unknown> = {
-            description: body.problem || body.description || '',
-            reporter: body.reporter,
-            reason: body.reason,
-            solution: body.solution,
+            description: body.problem || body.description || '（企微工单，无故障描述）',
+            reporter: body.reporter || null,
+            reason: body.reason || null,
+            solution: body.solution || null,
             status: status,
             source: 'wecom',
             raw_data: body,
-            occurred_at: body.report_time || new Date().toISOString(),
+            occurred_at: normalizeTimestamp(body.report_time),
         };
 
         // 仅在找到匹配时才设置外键字段
         if (stationId) faultRecord.station_id = stationId;
         if (workgroupId) faultRecord.workgroup_id = workgroupId;
         if (status === 'fixed' && body.fix_time) {
-            faultRecord.fixed_at = body.fix_time;
+            faultRecord.fixed_at = normalizeTimestamp(body.fix_time);
         }
 
         const { data, error } = await afcSupabase
