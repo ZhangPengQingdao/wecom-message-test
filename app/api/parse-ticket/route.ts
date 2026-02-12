@@ -115,10 +115,31 @@ export async function POST(request: Request) {
         const workgroupId = await findWorkgroupId(body.department);
         const stationId = await findStationId(body.location);
         const status = mapStatus(body.is_fixed);
+        const description = body.problem || body.description || '（企微工单，无故障描述）';
+
+        // AI: 去重逻辑 — 5分钟内相同 description + reporter 的企微工单视为重复
+        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const { data: existing } = await afcSupabase
+            .from('fault_records')
+            .select('id')
+            .eq('source', 'wecom')
+            .eq('description', description)
+            .eq('reporter', body.reporter || '')
+            .gte('created_at', fiveMinAgo)
+            .limit(1);
+
+        if (existing && existing.length > 0) {
+            return NextResponse.json({
+                success: true,
+                ticket_id: existing[0].id,
+                deduplicated: true,
+                message: '该工单已存在，跳过重复写入'
+            });
+        }
 
         // AI: 写入 AFC 项目的 fault_records 表（而非独立的 tickets 表）
         const faultRecord: Record<string, unknown> = {
-            description: body.problem || body.description || '（企微工单，无故障描述）',
+            description: description,
             reporter: body.reporter || null,
             reason: body.reason || null,
             solution: body.solution || null,
