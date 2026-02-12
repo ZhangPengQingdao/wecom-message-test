@@ -21,9 +21,13 @@ export async function GET(request: Request) {
         }
 
         // Return in a format that MCP tools can easily consume
-        return NextResponse.json({
+        return new NextResponse(JSON.stringify({
             messages: data,
             count: data?.length || 0
+        }), {
+            headers: {
+                'Content-Type': 'application/json; charset=utf-8'
+            }
         });
 
     } catch (error) {
