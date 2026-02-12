@@ -3,7 +3,18 @@ import { supabase } from '@/lib/supabase';
 
 export async function POST(request: Request) {
     try {
-        const body = await request.json();
+        let body = await request.json();
+
+        // Helper: Try to parse JSON from a string (handling potential Markdown code blocks)
+        if (body.json_payload && typeof body.json_payload === 'string') {
+            try {
+                const cleaned = body.json_payload.replace(/```json/g, '').replace(/```/g, '').trim();
+                const parsed = JSON.parse(cleaned);
+                body = { ...body, ...parsed }; // Merge parsed fields
+            } catch (e) {
+                console.warn('Failed to parse json_payload:', e);
+            }
+        }
 
         // API Key Validation
         const apiKey = request.headers.get('authorization')?.replace('Bearer ', '') ||
