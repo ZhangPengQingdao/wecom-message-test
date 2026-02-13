@@ -18,27 +18,52 @@ export async function POST(request: Request) {
         }
 
         // 必填参数校验
-        const { title, userid } = body;
+        const { title, userid, username } = body;
         if (!title) {
             return NextResponse.json({ error: '缺少 title 参数' }, { status: 400 });
         }
 
-        // 1. 用 wecom_userid 匹配系统用户
-        // AI: 如果没传 userid，尝试使用默认测试用户 (Fallback)
-        const targetUserId = userid || 'test_user';
+        // 1. 用户匹配逻辑 (优先级: userid > username > test_user)
+        let targetUser = null;
 
-        const { data: user, error: userError } = await afcSupabase
-            .from('users')
-            .select('id, name, workgroup_id')
-            .eq('wecom_userid', targetUserId)
-            .single();
+        // A. 尝试通过 userid 匹配
+        if (userid) {
+            const { data } = await afcSupabase
+                .from('users')
+                .select('id, name, workgroup_id')
+                .eq('wecom_userid', userid)
+                .single();
+            if (data) targetUser = data;
+        }
 
-        if (userError || !user) {
+        // B. 尝试通过 username 匹配 (如果 userid 没匹配到)
+        if (!targetUser && username) {
+            const { data } = await afcSupabase
+                .from('users')
+                .select('id, name, workgroup_id')
+                .eq('name', username)
+                .single();
+            if (data) targetUser = data;
+        }
+
+        // C. Fallback: 使用默认测试用户 (只在以上都失败时)
+        if (!targetUser) {
+            const { data } = await afcSupabase
+                .from('users')
+                .select('id, name, workgroup_id')
+                .eq('wecom_userid', 'test_user')
+                .single();
+            if (data) targetUser = data;
+        }
+
+        if (!targetUser) {
             return NextResponse.json({
                 error: '未找到匹配的系统用户',
-                detail: `wecom_userid "${targetUserId}" (原始: "${userid}") 未在系统中注册。请先在系统设置中绑定企微账号。`
+                detail: `无法识别用户身份。userid="${userid}", username="${username}" 均未匹配，且无默认测试用户。`
             }, { status: 404 });
         }
+
+        const user = targetUser; // 统一变量名
 
         // 2. 解析车站范围
         let stationIds: string[] = [];
