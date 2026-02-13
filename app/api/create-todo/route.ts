@@ -75,16 +75,26 @@ export async function POST(request: Request) {
             description
         } = body;
 
-        if (start_station && end_station) {
-            // AI: 区间模式 — 查找起止站之间的所有车站（本工班）
+        // AI: 智能车站解析 — 支持三种模式
+        const hasSeparator = start_station && /[、,，]/.test(start_station);
+
+        if (hasSeparator) {
+            // A. 列表模式 — start_station 包含顿号/逗号分隔的多个站名
+            const names = start_station.split(/[、,，]/).map((s: string) => s.trim()).filter(Boolean);
+            stationIds = await resolveStationNames(names, user.workgroup_id);
+        } else if (start_station && end_station) {
+            // B. 区间模式 — 查找起止站之间的所有车站（本工班）
             stationIds = await resolveStationRange(
                 start_station,
                 end_station,
                 line || null,
                 user.workgroup_id
             );
+        } else if (start_station && !end_station) {
+            // C. 单站模式 — 只传了 start_station
+            stationIds = await resolveStationNames([start_station], user.workgroup_id);
         } else if (station_names && Array.isArray(station_names)) {
-            // AI: 列表模式 — 逐一匹配车站名
+            // D. 原有列表模式（兼容）
             stationIds = await resolveStationNames(station_names, user.workgroup_id);
         }
 

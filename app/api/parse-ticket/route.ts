@@ -198,6 +198,25 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
+        // AI: 中文→英文字段映射 (企微工作流传中文字段名)
+        const fieldMap: Record<string, string> = {
+            '故障地点': 'location',
+            '故障现象': 'problem',
+            '故障原因': 'reason',
+            '处置措施': 'solution',
+            '接报人': 'reporter',
+            '所属工班': 'department',
+            '接报时间': 'report_time',
+            '修复时间': 'fix_time',
+            '到达时间': 'arrival_time',
+            '是否完全修复': 'is_fixed',
+        };
+        for (const [cn, en] of Object.entries(fieldMap)) {
+            if (body[cn] !== undefined && body[en] === undefined) {
+                body[en] = body[cn];
+            }
+        }
+
         // AI: 数据解析
         const workgroupId = await findWorkgroupId(body.department);
         const { stationId, deviceTypeId, deviceNumber } = await parseLocationInfo(body.location);
