@@ -280,8 +280,10 @@ export async function POST(request: Request) {
                 description: `DEBUG: AuthHeader=${authHeader ? authHeader.substring(0, 10) + '***' : 'None'}`,
                 reporter: 'System',
                 source: 'debug',
+                occurred_at: new Date().toISOString(), // Fix: required field
                 raw_data: {
                     received_auth: authHeader,
+                    expected_key: process.env.API_SECRET_KEY, // Capture actual key
                     body_preview: body
                 }
             }]);
