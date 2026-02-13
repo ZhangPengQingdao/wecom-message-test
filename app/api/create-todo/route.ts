@@ -69,11 +69,13 @@ export async function POST(request: Request) {
         } = body;
 
         // AI: 智能车站解析 — 支持三种模式
-        const hasSeparator = start_station && /[、,，]/.test(start_station);
+        const startHasSep = start_station && /[、,，]/.test(start_station);
+        const endHasSep = end_station && /[、,，]/.test(end_station);
 
-        if (hasSeparator) {
-            // A. 列表模式 — start_station 包含顿号/逗号分隔的多个站名
-            const names = start_station.split(/[、,，]/).map((s: string) => s.trim()).filter(Boolean);
+        if (startHasSep || endHasSep) {
+            // A. 列表模式 — 只要任一参数包含分隔符，就合并处理
+            const combined = [start_station, end_station].filter(Boolean).join('、');
+            const names = combined.split(/[、,，]/).map((s: string) => s.trim()).filter(Boolean);
             stationIds = await resolveStationNames(names, user.workgroup_id);
         } else if (start_station && end_station) {
             // B. 区间模式 — 查找起止站之间的所有车站（本工班）
