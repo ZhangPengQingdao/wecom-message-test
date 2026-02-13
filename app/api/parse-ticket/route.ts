@@ -291,12 +291,15 @@ export async function POST(request: Request) {
             '故障现象': 'problem',
             '故障原因': 'reason',
             '处置措施': 'solution',
-            '接报人': 'reporter',
-            '所属工班': 'department',
             '接报时间': 'report_time',
-            '修复时间': 'fix_time',
+            '接报人': 'reporter',
+            // AI: 补充时间字段映射，确保前端能从 raw_data 读取
             '到达时间': 'arrival_time',
+            '修复时间': 'fix_time',
+            '所属工班': 'department',
             '是否完全修复': 'is_fixed',
+            '处置措施': 'solution',
+            '接报时间': 'report_time',
         };
         for (const [cn, en] of Object.entries(fieldMap)) {
             if (body[cn] !== undefined && body[en] === undefined) {
