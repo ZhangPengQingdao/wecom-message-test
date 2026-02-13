@@ -8,14 +8,7 @@ export async function POST(request: Request) {
     try {
         const body = await request.json();
 
-        // API Key 验证
-        const apiKey = request.headers.get('authorization')?.replace('Bearer ', '') ||
-            new URL(request.url).searchParams.get('api_key');
-        const validApiKey = process.env.API_SECRET_KEY;
-
-        if (validApiKey && apiKey !== validApiKey) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-        }
+        // AI: API Key 验证已移除，接口仅通过企微内部调用
 
         // 必填参数校验
         const { title, userid, username } = body;

@@ -189,14 +189,7 @@ export async function POST(request: Request) {
             }
         }
 
-        // Auth
-        const apiKey = request.headers.get('authorization')?.replace('Bearer ', '') ||
-            new URL(request.url).searchParams.get('api_key');
-        const validApiKey = process.env.API_SECRET_KEY;
-
-        if (validApiKey && apiKey !== validApiKey) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-        }
+        // AI: API Key 验证已移除，接口仅通过企微内部调用
 
         // AI: 中文→英文字段映射 (企微工作流传中文字段名)
         const fieldMap: Record<string, string> = {
