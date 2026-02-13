@@ -1,0 +1,211 @@
+import { NextResponse } from 'next/server';
+import { afcSupabase } from '@/lib/afcSupabase';
+
+// AI: 企微工作流 → 创建待办事项 API
+// 接收大模型拆分的参数，按车站区间创建待办任务（工班隔离）
+
+export async function POST(request: Request) {
+    try {
+        const body = await request.json();
+
+        // API Key 验证
+        const apiKey = request.headers.get('authorization')?.replace('Bearer ', '') ||
+            new URL(request.url).searchParams.get('api_key');
+        const validApiKey = process.env.API_SECRET_KEY;
+
+        if (validApiKey && apiKey !== validApiKey) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        // 必填参数校验
+        const { title, userid } = body;
+        if (!title) {
+            return NextResponse.json({ error: '缺少 title 参数' }, { status: 400 });
+        }
+        if (!userid) {
+            return NextResponse.json({ error: '缺少 userid 参数' }, { status: 400 });
+        }
+
+        // 1. 用 wecom_userid 匹配系统用户，获取 creator_id 和 workgroup_id
+        const { data: user, error: userError } = await afcSupabase
+            .from('users')
+            .select('id, name, workgroup_id')
+            .eq('wecom_userid', userid)
+            .single();
+
+        if (userError || !user) {
+            return NextResponse.json({
+                error: '未找到匹配的系统用户',
+                detail: `wecom_userid "${userid}" 未在系统中注册。请先在系统设置中绑定企微账号。`
+            }, { status: 404 });
+        }
+
+        // 2. 解析车站范围
+        let stationIds: string[] = [];
+        const {
+            start_station,
+            end_station,
+            station_names,
+            line,
+            description
+        } = body;
+
+        if (start_station && end_station) {
+            // AI: 区间模式 — 查找起止站之间的所有车站（本工班）
+            stationIds = await resolveStationRange(
+                start_station,
+                end_station,
+                line || null,
+                user.workgroup_id
+            );
+        } else if (station_names && Array.isArray(station_names)) {
+            // AI: 列表模式 — 逐一匹配车站名
+            stationIds = await resolveStationNames(station_names, user.workgroup_id);
+        }
+
+        if (stationIds.length === 0) {
+            return NextResponse.json({
+                error: '未匹配到任何车站',
+                detail: `在本工班负责范围内未找到指定车站。start="${start_station}", end="${end_station}"`,
+                user_workgroup: user.workgroup_id
+            }, { status: 404 });
+        }
+
+        // 3. 创建待办任务
+        const { data: task, error: taskError } = await afcSupabase
+            .from('todo_tasks')
+            .insert({
+                title: title,
+                description: description || null,
+                task_type: 'general',
+                scope_type: 'station',
+                workgroup_id: user.workgroup_id,
+                creator_id: user.id,
+                status: 'in_progress'
+            })
+            .select()
+            .single();
+
+        if (taskError) {
+            console.error('Create todo_task error:', taskError);
+            return NextResponse.json({
+                error: '创建任务失败',
+                detail: taskError.message
+            }, { status: 500 });
+        }
+
+        // 4. 为每个车站创建待办子项
+        const items = stationIds.map(stationId => ({
+            task_id: task.id,
+            target_station_id: stationId,
+            status: 'pending'
+        }));
+
+        const { error: itemsError } = await afcSupabase
+            .from('todo_items')
+            .insert(items);
+
+        if (itemsError) {
+            console.error('Create todo_items error:', itemsError);
+            // 回滚：删除已创建的主任务
+            await afcSupabase.from('todo_tasks').delete().eq('id', task.id);
+            return NextResponse.json({
+                error: '创建子项失败',
+                detail: itemsError.message
+            }, { status: 500 });
+        }
+
+        return NextResponse.json({
+            success: true,
+            task_id: task.id,
+            title: title,
+            station_count: stationIds.length,
+            creator: user.name,
+            message: `已创建待办：${title}，共 ${stationIds.length} 个车站`
+        });
+
+    } catch (error) {
+        console.error('Create Todo Error:', error);
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    }
+}
+
+// AI: 区间查询 — 根据起止站名和 sort_order 查出区间内所有车站
+async function resolveStationRange(
+    startName: string,
+    endName: string,
+    line: string | null,
+    workgroupId: string
+): Promise<string[]> {
+    // 查找起止站（支持模糊匹配，去"站"后缀）
+    const startClean = startName.replace(/站$/, '');
+    const endClean = endName.replace(/站$/, '');
+
+    // AI: 查出起止站的 sort_order 和所属线路
+    const { data: endpoints } = await afcSupabase
+        .from('stations')
+        .select('id, name, line, sort_order, alias')
+        .or(`name.ilike.%${startClean}%,name.ilike.%${endClean}%,alias.ilike.%${startClean}%,alias.ilike.%${endClean}%`);
+
+    if (!endpoints || endpoints.length < 2) {
+        return [];
+    }
+
+    // 匹配起止站
+    const matchStation = (name: string) => {
+        const clean = name.replace(/站$/, '');
+        return endpoints.find(s =>
+            s.name.includes(clean) || clean.includes(s.name.replace(/站$/, '')) ||
+            (s.alias && (s.alias.includes(clean) || clean.includes(s.alias)))
+        );
+    };
+
+    const startStation = matchStation(startName);
+    const endStation = matchStation(endName);
+
+    if (!startStation || !endStation) return [];
+
+    // 确定线路（优先使用参数指定的，否则取起止站共同线路）
+    const targetLine = line || startStation.line;
+    if (!targetLine) return [];
+
+    // 计算 sort_order 范围
+    const minOrder = Math.min(startStation.sort_order!, endStation.sort_order!);
+    const maxOrder = Math.max(startStation.sort_order!, endStation.sort_order!);
+
+    // AI: 查询区间内、本工班负责的车站
+    const { data: stations } = await afcSupabase
+        .from('stations')
+        .select('id')
+        .eq('line', targetLine)
+        .eq('workgroup_id', workgroupId)
+        .gte('sort_order', minOrder)
+        .lte('sort_order', maxOrder)
+        .order('sort_order', { ascending: true });
+
+    return (stations || []).map(s => s.id);
+}
+
+// AI: 列表匹配 — 逐一匹配车站名称
+async function resolveStationNames(
+    names: string[],
+    workgroupId: string
+): Promise<string[]> {
+    const ids: string[] = [];
+
+    for (const name of names) {
+        const clean = name.replace(/站$/, '');
+        const { data } = await afcSupabase
+            .from('stations')
+            .select('id')
+            .eq('workgroup_id', workgroupId)
+            .or(`name.ilike.%${clean}%,alias.ilike.%${clean}%`)
+            .limit(1);
+
+        if (data && data.length > 0) {
+            ids.push(data[0].id);
+        }
+    }
+
+    return ids;
+}
