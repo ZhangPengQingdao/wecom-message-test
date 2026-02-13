@@ -308,8 +308,11 @@ export async function POST(request: Request) {
                 ? afcSupabase.from('workgroups').select('id').eq('name', standardDept).single()
                 : Promise.resolve({ data: null }),
             afcSupabase.from('fault_records').select('id')
-                .eq('source', 'wecom').eq('description', description)
-                .eq('reporter', body.reporter || '').gte('created_at', fiveMinAgo).limit(1)
+                .eq('source', 'wecom')
+                .eq('description', description)
+                .eq('reporter', body.reporter || '')
+                .eq('raw_data->>location', location) // AI: 增加地点校验，避免不同地点的相同故障被误判为重复
+                .gte('created_at', fiveMinAgo).limit(1)
         ]);
 
         // AI: 去重检查
