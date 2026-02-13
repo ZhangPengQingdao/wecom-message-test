@@ -172,18 +172,26 @@ function parseLocationFromData(
 
     // 2. 匹配车站（按名称长度降序，优先匹配长名）
     let stationId: string | null = null;
-    const candidates = stations.map(s => ({
-        ...s, cleanName: s.name.replace(/站$/, '')
-    })).sort((a, b) => {
+    const candidates = stations.map(s => {
+        // AI: 处理车站名的变体
+        // 1. 去掉"站"后缀
+        // 2. 去掉括号及内容（如 "海泊桥（海慈医疗）" -> "海泊桥"）
+        const cleanName = s.name.replace(/站$/, '');
+        const simpleName = cleanName.replace(/[\(（].*?[\)）]/g, '');
+        return { ...s, cleanName, simpleName };
+    }).sort((a, b) => {
         if (targetLine) {
             const aMatch = a.line === targetLine ? 1 : 0;
             const bMatch = b.line === targetLine ? 1 : 0;
             if (aMatch !== bMatch) return bMatch - aMatch;
         }
-        return b.cleanName.length - a.cleanName.length;
+        // 优先匹配最长的名字（避免 "西镇" 误配 "小西湖" 里的字，虽然不太可能，主要是避免 "安子" 匹配 "安子东"）
+        return b.simpleName.length - a.simpleName.length;
     });
+
     for (const s of candidates) {
-        if (location.includes(s.cleanName) || location.includes(s.name)) {
+        // AI: 支持全名、去后缀名、去括号名匹配
+        if (location.includes(s.name) || location.includes(s.cleanName) || location.includes(s.simpleName)) {
             stationId = s.id;
             break;
         }
