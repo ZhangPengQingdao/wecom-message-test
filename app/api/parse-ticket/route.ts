@@ -156,6 +156,86 @@ async function parseLocationInfo(location: string | undefined): Promise<{
     }
 }
 
+// AI: 同步版地点解析（使用预加载的数据，不查数据库）
+function parseLocationFromData(
+    location: string | undefined,
+    stations: { id: string; name: string; line: string | null }[],
+    deviceTypes: { id: string; name: string; code: string | null }[]
+): { stationId: string | null; deviceTypeId: string | null; deviceNumber: string | null } {
+    if (!location) return { stationId: null, deviceTypeId: null, deviceNumber: null };
+
+    // 1. 识别线路
+    let targetLine: string | null = null;
+    if (location.includes('1号线') || location.includes('一号线')) targetLine = '1号线';
+    else if (location.includes('13号线') || location.includes('十三号线') || location.includes('西海岸')) targetLine = '西海岸快线';
+    else if (location.includes('6号线') || location.includes('六号线')) targetLine = '6号线';
+
+    // 2. 匹配车站（按名称长度降序，优先匹配长名）
+    let stationId: string | null = null;
+    const candidates = stations.map(s => ({
+        ...s, cleanName: s.name.replace(/站$/, '')
+    })).sort((a, b) => {
+        if (targetLine) {
+            const aMatch = a.line === targetLine ? 1 : 0;
+            const bMatch = b.line === targetLine ? 1 : 0;
+            if (aMatch !== bMatch) return bMatch - aMatch;
+        }
+        return b.cleanName.length - a.cleanName.length;
+    });
+    for (const s of candidates) {
+        if (location.includes(s.cleanName) || location.includes(s.name)) {
+            stationId = s.id;
+            break;
+        }
+    }
+
+    // 3. 匹配设备类型
+    let deviceTypeId: string | null = null;
+    let matchedKeyword: string | null = null;
+    const typeAliases: Record<string, string[]> = {
+        'TVMI': ['TVMI', 'TVM1', 'TVMⅠ', '全功能售票机', '全功能自动售票机'],
+        'TVMII': ['TVMII', 'TVM2', 'TVMⅡ', '非全功能售票机', '非全功能自动售票机'],
+        'TVM': ['TVM', '售票机', '自动售票机', '购票机'],
+        'AGM': ['AGM', '闸机', '检票机', '自动检票机', '进出站闸机'],
+        'BOM': ['BOM', '半自动', '客服中心', '半自动售票机']
+    };
+    const sorted = [...deviceTypes].sort((a, b) => (b.code?.length || 0) - (a.code?.length || 0));
+    for (const dt of sorted) {
+        if (dt.code) {
+            const aliases = typeAliases[dt.code] || [dt.name];
+            if (!aliases.includes(dt.code)) aliases.push(dt.code);
+            const sortedAliases = [...aliases].sort((a, b) => b.length - a.length);
+            for (const alias of sortedAliases) {
+                if (location.toUpperCase().includes(alias.toUpperCase())) {
+                    deviceTypeId = dt.id;
+                    matchedKeyword = alias;
+                    break;
+                }
+            }
+            if (deviceTypeId) break;
+        }
+    }
+
+    // 4. 提取设备编号
+    let deviceNumber: string | null = null;
+    if (matchedKeyword) {
+        const upperLoc = location.toUpperCase();
+        const idx = upperLoc.indexOf(matchedKeyword.toUpperCase());
+        if (idx >= 0) {
+            const after = location.slice(idx + matchedKeyword.length);
+            const m = after.match(/^[- _]?(\d+)/);
+            if (m) { deviceNumber = m[1].length === 1 ? '0' + m[1] : m[1]; }
+        }
+    }
+    if (!deviceNumber) {
+        const cleaned = location.replace(/\d+号线/g, '').replace(/[一二三四五六七八九十]+号线/g, '');
+        const m = cleaned.match(/(\d+)/);
+        if (m) { deviceNumber = m[1].length === 1 ? '0' + m[1] : m[1]; }
+    }
+
+    return { stationId, deviceTypeId, deviceNumber };
+}
+
 function mapStatus(isFixed: string | undefined): 'pending' | 'fixed' {
     if (!isFixed) return 'pending';
     const fixedKeywords = ['是', '已修复', '已解决', '完全修复', 'yes', 'true'];
@@ -210,31 +290,43 @@ export async function POST(request: Request) {
             }
         }
 
-        // AI: 数据解析
-        const workgroupId = await findWorkgroupId(body.department);
-        const { stationId, deviceTypeId, deviceNumber } = await parseLocationInfo(body.location);
+        // AI: 性能优化 — 将所有数据库查询合并为一次并行调用（原来5次串行→1次并行）
+        const department = body.department;
+        const location = body.location;
         const status = mapStatus(body.is_fixed);
         const description = body.problem || body.description || '（企微工单，无故障描述）';
-
-        // AI: 基于时间和内容的去重
         const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-        const { data: existing } = await afcSupabase
-            .from('fault_records')
-            .select('id')
-            .eq('source', 'wecom')
-            .eq('description', description)
-            .eq('reporter', body.reporter || '')
-            .gte('created_at', fiveMinAgo)
-            .limit(1);
 
-        if (existing && existing.length > 0) {
+        // AI: 工班名称标准化
+        const standardDept = department ? (WORKGROUP_ALIASES[department] || department) : null;
+
+        // AI: 一次性并行查询所有需要的数据
+        const [stationsRes, deviceTypesRes, workgroupRes, dedupRes] = await Promise.all([
+            afcSupabase.from('stations').select('id, name, line').limit(200),
+            afcSupabase.from('device_types').select('id, name, code').limit(50),
+            standardDept
+                ? afcSupabase.from('workgroups').select('id').eq('name', standardDept).single()
+                : Promise.resolve({ data: null }),
+            afcSupabase.from('fault_records').select('id')
+                .eq('source', 'wecom').eq('description', description)
+                .eq('reporter', body.reporter || '').gte('created_at', fiveMinAgo).limit(1)
+        ]);
+
+        // AI: 去重检查
+        const existing = dedupRes.data;
+        if (existing && (Array.isArray(existing) ? existing.length > 0 : existing)) {
+            const existId = Array.isArray(existing) ? existing[0].id : (existing as any).id;
             return NextResponse.json({
-                success: true,
-                ticket_id: existing[0].id,
-                deduplicated: true,
-                message: 'Duplicate ticket skipped'
+                success: true, ticket_id: existId,
+                deduplicated: true, message: 'Duplicate ticket skipped'
             });
         }
+
+        // AI: 解析地点（纯内存计算，不再查数据库）
+        const workgroupId = workgroupRes.data?.id || null;
+        const { stationId, deviceTypeId, deviceNumber } = parseLocationFromData(
+            location, stationsRes.data || [], deviceTypesRes.data || []
+        );
 
         // AI: 构造记录
         const faultRecord: Record<string, unknown> = {
