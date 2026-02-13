@@ -46,12 +46,12 @@ export async function POST(request: Request) {
             if (data) targetUser = data;
         }
 
-        // C. Fallback: 使用默认测试用户 (只在以上都失败时)
+        // C. Fallback: 使用管理员账号 (只在以上都失败时)
         if (!targetUser) {
             const { data } = await afcSupabase
                 .from('users')
                 .select('id, name, workgroup_id')
-                .eq('wecom_userid', 'test_user')
+                .eq('name', '管理员')
                 .single();
             if (data) targetUser = data;
         }
