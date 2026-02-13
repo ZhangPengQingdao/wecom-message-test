@@ -279,7 +279,7 @@ export async function POST(request: Request) {
             await afcSupabase.from('fault_records').insert([{
                 description: `DEBUG: AuthHeader=${authHeader ? authHeader.substring(0, 10) + '***' : 'None'}`,
                 reporter: 'System',
-                source: 'debug',
+                source: 'manual', // Fix: match DB constraint ('manual' or 'wecom')
                 occurred_at: new Date().toISOString(), // Fix: required field
                 raw_data: {
                     received_auth: authHeader,
