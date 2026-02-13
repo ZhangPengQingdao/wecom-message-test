@@ -269,7 +269,13 @@ export async function POST(request: Request) {
             }
         }
 
-        // AI: API Key 验证已移除，接口仅通过企微内部调用
+        console.log('[Parse-Ticket] Received body:', JSON.stringify(body));
+
+        // AI: API Key 验证
+        const authHeader = request.headers.get('Authorization');
+        if (authHeader !== `Bearer ${process.env.API_SECRET_KEY}`) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
 
         // AI: 中文→英文字段映射 (企微工作流传中文字段名)
         const fieldMap: Record<string, string> = {
