@@ -96,7 +96,29 @@ export async function POST(request: Request) {
             }, { status: 404 });
         }
 
-        // 3. 创建待办任务
+        // 3. 去重检查：同一用户 5 分钟内不重复创建相同标题的待办
+        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const { data: existingTask } = await afcSupabase
+            .from('todo_tasks')
+            .select('id, title, created_at')
+            .eq('creator_id', user.id)
+            .eq('title', title)
+            .gte('created_at', fiveMinAgo)
+            .limit(1);
+
+        if (existingTask && existingTask.length > 0) {
+            // AI: 检测到重复，返回已有任务信息而非报错
+            return NextResponse.json({
+                success: true,
+                task_id: existingTask[0].id,
+                title: title,
+                creator: user.name,
+                message: `待办已存在（${existingTask[0].created_at}），未重复创建`,
+                deduplicated: true
+            });
+        }
+
+        // 4. 创建待办任务
         const { data: task, error: taskError } = await afcSupabase
             .from('todo_tasks')
             .insert({
