@@ -22,21 +22,21 @@ export async function POST(request: Request) {
         if (!title) {
             return NextResponse.json({ error: '缺少 title 参数' }, { status: 400 });
         }
-        if (!userid) {
-            return NextResponse.json({ error: '缺少 userid 参数' }, { status: 400 });
-        }
 
-        // 1. 用 wecom_userid 匹配系统用户，获取 creator_id 和 workgroup_id
+        // 1. 用 wecom_userid 匹配系统用户
+        // AI: 如果没传 userid，尝试使用默认测试用户 (Fallback)
+        const targetUserId = userid || 'test_user';
+
         const { data: user, error: userError } = await afcSupabase
             .from('users')
             .select('id, name, workgroup_id')
-            .eq('wecom_userid', userid)
+            .eq('wecom_userid', targetUserId)
             .single();
 
         if (userError || !user) {
             return NextResponse.json({
                 error: '未找到匹配的系统用户',
-                detail: `wecom_userid "${userid}" 未在系统中注册。请先在系统设置中绑定企微账号。`
+                detail: `wecom_userid "${targetUserId}" (原始: "${userid}") 未在系统中注册。请先在系统设置中绑定企微账号。`
             }, { status: 404 });
         }
 
