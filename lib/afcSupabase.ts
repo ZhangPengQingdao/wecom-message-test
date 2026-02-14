@@ -3,6 +3,8 @@
 import { createClient } from '@supabase/supabase-js'
 
 const afcSupabaseUrl = process.env.AFC_SUPABASE_URL!
-const afcSupabaseKey = process.env.AFC_SUPABASE_ANON_KEY!
+const afcSupabaseUrl = process.env.AFC_SUPABASE_URL!
+// AI: 使用 Service Role Key 绕过 RLS 策略，确保后台任务有写入权限
+const afcSupabaseKey = process.env.AFC_SUPABASE_SERVICE_ROLE_KEY || process.env.AFC_SUPABASE_ANON_KEY!
 
 export const afcSupabase = createClient(afcSupabaseUrl, afcSupabaseKey)
